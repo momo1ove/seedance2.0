@@ -422,7 +422,7 @@ v0.0.2 已修复此问题。该错误是即梦平台的 shark 反爬机制拦截
 
 欢迎加入技术交流群，分享使用心得和创作成果：
 
-![技术交流群](https://mypicture-1258720957.cos.ap-nanjing.myqcloud.com/Obsidian/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260303214419_166_292.jpg)
+![技术交流群](https://mypicture-1258720957.cos.ap-nanjing.myqcloud.com/Obsidian/%E5%BE%AE%E4%BF%A1%E5%9B%BE%E7%89%87_20260310230630_169_292.jpg)
 
 ## 作者联系
 

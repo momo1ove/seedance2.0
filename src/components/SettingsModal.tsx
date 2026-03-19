@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CloseIcon, EyeIcon, EyeOffIcon } from './Icons';
 
 interface SettingsModalProps {
@@ -84,7 +84,7 @@ export default function SettingsModal({
 
   if (!isOpen) return null;
 
-  const canUsePoolMode = useMemo(() => true, []);
+  const canUsePoolMode = true;
 
   const formatTime = (ts: number) => {
     if (!ts) return '-';

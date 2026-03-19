@@ -6,11 +6,27 @@ import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import browserService from './browser-service.js';
+import SessionPool from './session-pool.js';
+const SESSION_POOL_FILE =
+  process.env.SEEDANCE_SESSION_POOL_FILE || '/data/session-pool.json';
+const SESSION_POOL_ENABLED =
+  String(process.env.SEEDANCE_SESSION_POOL_ENABLED || 'false').toLowerCase() ===
+  'true';
+const SESSION_POOL_ADMIN_KEY = process.env.SEEDANCE_ADMIN_KEY || '';
+
+const sessionPool = new SessionPool({ filePath: SESSION_POOL_FILE });
+await sessionPool.load();
+
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = process.env.PORT || 3001;
 const DEFAULT_SESSION_ID = process.env.VITE_DEFAULT_SESSION_ID || '';
+
+// ============================================================
+// Session Pool (optional)
+// ============================================================
+
 
 app.use(cors());
 app.use(express.json());
@@ -924,6 +940,80 @@ async function generateSeedanceVideo(
 // ============================================================
 
 // POST /api/generate-video - 提交任务, 立即返回 taskId
+// ============================================================
+// Session Pool Admin API (optional)
+// ============================================================
+function requireAdmin(req, res) {
+  if (!SESSION_POOL_ADMIN_KEY) {
+    return res.status(403).json({ error: 'Admin key not set' });
+  }
+  const hdr = req.headers['authorization'] || '';
+  const token = String(hdr).startsWith('Bearer ') ? String(hdr).slice(7) : '';
+  if (token !== SESSION_POOL_ADMIN_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  return null;
+}
+
+// GET /api/pool - view pool status (masked)
+app.get('/api/pool', (req, res) => {
+  const deny = requireAdmin(req, res);
+  if (deny) return;
+  res.json({ enabled: SESSION_POOL_ENABLED, file: SESSION_POOL_FILE, ...sessionPool.snapshot({ includeSecrets: false }) });
+});
+
+// POST /api/pool/add { sessionId, remark }
+app.post('/api/pool/add', async (req, res) => {
+  const deny = requireAdmin(req, res);
+  if (deny) return;
+  const { sessionId, remark } = req.body || {};
+  try {
+    await sessionPool.add({ sessionId, remark: remark || '' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// POST /api/pool/replace { sessionIds: string[], remark }
+app.post('/api/pool/replace', async (req, res) => {
+  const deny = requireAdmin(req, res);
+  if (deny) return;
+  const { sessionIds, remark } = req.body || {};
+  try {
+    await sessionPool.replaceAll({ sessionIds, remark: remark || '' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// POST /api/pool/remove { id }
+app.post('/api/pool/remove', async (req, res) => {
+  const deny = requireAdmin(req, res);
+  if (deny) return;
+  const { id } = req.body || {};
+  try {
+    await sessionPool.remove(String(id || ''));
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+// POST /api/pool/active { id, isActive }
+app.post('/api/pool/active', async (req, res) => {
+  const deny = requireAdmin(req, res);
+  if (deny) return;
+  const { id, isActive } = req.body || {};
+  try {
+    await sessionPool.setActive(String(id || ''), !!isActive);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
 app.post('/api/generate-video', upload.array('files', 5), async (req, res) => {
   const startTime = Date.now();
 
@@ -931,12 +1021,18 @@ app.post('/api/generate-video', upload.array('files', 5), async (req, res) => {
     const { prompt, ratio, duration, sessionId, model } = req.body;
     const files = req.files;
 
-    // 认证检查
-    const authToken = sessionId || DEFAULT_SESSION_ID;
+    // 认证检查：优先请求体 sessionId，其次环境变量 DEFAULT_SESSION_ID，最后从 session pool 取一个
+    let authToken = sessionId || DEFAULT_SESSION_ID;
+    let poolItem = null;
+    if (!authToken && SESSION_POOL_ENABLED) {
+      poolItem = sessionPool.acquire();
+      authToken = poolItem?.sessionId || '';
+    }
+
     if (!authToken) {
       return res
         .status(401)
-        .json({ error: '未配置 Session ID，请在设置中填写' });
+        .json({ error: '未配置 Session ID（可在设置中填写或启用 session pool）' });
     }
 
     // Seedance 2.0 需要至少一张图片
@@ -955,8 +1051,12 @@ app.post('/api/generate-video', upload.array('files', 5), async (req, res) => {
       startTime,
       result: null,
       error: null,
+      // internal
+      _poolItemId: null,
     };
     tasks.set(taskId, task);
+    // remember pool item used for this request (if any)
+    task._poolItemId = poolItem?.id || null;
 
     console.log(`\n========== [${taskId}] 收到视频生成请求 ==========`);
     console.log(`  prompt: ${(prompt || '').substring(0, 80)}${(prompt || '').length > 80 ? '...' : ''}`);
@@ -978,6 +1078,8 @@ app.post('/api/generate-video', upload.array('files', 5), async (req, res) => {
       duration: parseInt(duration) || 4,
       files,
       sessionId: authToken,
+      // internal: remember which pool item was used (no secrets)
+      _poolItemId: poolItem?.id || null,
       model: model || 'seedance-2.0',
     })
       .then((videoUrl) => {
@@ -991,13 +1093,19 @@ app.post('/api/generate-video', upload.array('files', 5), async (req, res) => {
           `========== [${taskId}] ✅ 视频生成成功 (${elapsed}秒) ==========\n`
         );
       })
-      .catch((err) => {
+      .catch(async (err) => {
         task.status = 'error';
         task.error = err.message || '视频生成失败';
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
         console.error(
           `========== [${taskId}] ❌ 视频生成失败 (${elapsed}秒): ${err.message} ==========\n`
         );
+
+        // If this request used a pooled session, put it on cooldown to avoid repeated failures.
+        if (SESSION_POOL_ENABLED && task._poolItemId) {
+          const ms = Number(process.env.SEEDANCE_POOL_COOLDOWN_MS || 15 * 60 * 1000);
+          await sessionPool.cooldown(task._poolItemId, ms, err.message || 'error');
+        }
       });
   } catch (error) {
     console.error(`请求处理错误: ${error.message}`);

@@ -57,7 +57,7 @@ RUN cd server && npm install --production
 RUN cd server && npx playwright-core install chromium
 
 # 复制后端代码
-COPY server/index.js server/browser-service.js ./server/
+COPY server/index.js server/browser-service.js server/session-pool.js ./server/
 
 # 从第一阶段复制前端构建产物
 COPY --from=frontend-build /app/dist ./dist

@@ -26,6 +26,7 @@ export default function App() {
     status: 'idle',
   });
   const [sessionId, setSessionId] = useState('');
+  const [authMode, setAuthMode] = useState<'single' | 'pool'>('single');
   const [showSettings, setShowSettings] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const maxImages = 5;
@@ -33,9 +34,11 @@ export default function App() {
   useEffect(() => {
     const saved = loadSettings();
     if (saved.sessionId) setSessionId(saved.sessionId);
+    if (saved.authMode) setAuthMode(saved.authMode);
 
+    // UX: only auto-open settings when user chose 'single' mode but has no session configured.
     const envSessionId = import.meta.env.VITE_DEFAULT_SESSION_ID;
-    if (!saved.sessionId && !envSessionId) {
+    if ((saved.authMode || 'single') === 'single' && !saved.sessionId && !envSessionId) {
       setShowSettings(true);
     }
   }, []);
@@ -94,7 +97,7 @@ export default function App() {
           ratio,
           duration,
           files: images.map((img) => img.file),
-          sessionId: sessionId || undefined,
+          sessionId: authMode === 'single' ? (sessionId || undefined) : undefined,
         },
         (progress) => {
           setGeneration((prev) => ({ ...prev, progress }));
@@ -450,6 +453,8 @@ export default function App() {
         onClose={() => setShowSettings(false)}
         sessionId={sessionId}
         onSessionIdChange={setSessionId}
+        authMode={authMode}
+        onAuthModeChange={setAuthMode}
       />
     </div>
   );
